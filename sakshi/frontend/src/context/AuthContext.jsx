@@ -31,11 +31,25 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = async (email, password) => {
-    const res = await loginApi(email, password);
-    setToken(res.token);
-    setUser(res.user);
-    authState.setAuth(res.token, res.user);
-    return res.user;
+    try {
+      const res = await loginApi(email, password);
+      setToken(res.token);
+      setUser(res.user);
+      authState.setAuth(res.token, res.user);
+      return res.user;
+    } catch (err) {
+      // Fallback for static GitHub Pages / demo mode
+      const seedMatch = SEED_USERS.find(u => u.email === email);
+      if (seedMatch && password === 'demo123') {
+        const fallbackUser = { email: seedMatch.email, name: seedMatch.name, role: seedMatch.role };
+        const fallbackToken = `token_${seedMatch.role}_offline`;
+        setToken(fallbackToken);
+        setUser(fallbackUser);
+        authState.setAuth(fallbackToken, fallbackUser);
+        return fallbackUser;
+      }
+      throw err;
+    }
   };
 
   const switchRoleDirectly = (targetEmail) => {
