@@ -32,22 +32,22 @@ import { useAuth } from '../context/AuthContext';
 import EvidenceModal from '../components/EvidenceModal';
 
 const COMMUNITY_COLORS = {
-  1: '#0d9488', // Teal (Cluster A Durg)
-  2: '#f59e0b', // Amber (Cluster B Nagpur)
-  3: '#ec4899', // Pink/Magenta (Inter-cluster Broker & Burner)
-  4: '#38bdf8', // Sky Blue (Missing Persons Cluster)
-  5: '#a855f7', // Purple (Pass-through Mule Account Chain)
-  6: '#64748b', // Slate Gray (Peripheral incidental)
+  1: '#ef2b2d', // Bright Red (Core Bridge / Cluster 1)
+  2: '#f97316', // Orange (Cluster 2)
+  3: '#e8eaed', // White / Platinum (Cluster 3)
+  4: '#94a3b8', // Slate Grey (Cluster 4)
+  5: '#64748b', // Muted Grey (Cluster 5)
+  6: '#cbd5e1', // Light Silver (Cluster 6)
 };
 
 const EDGE_COLORS = {
-  call: '#14b8a6',
-  transfer: '#a855f7',
-  stay: '#38bdf8',
-  co_travel: '#f59e0b',
-  owns: '#94a3b8',
-  mention: '#e2e8f0',
-  ad_response: '#fb7185',
+  call: '#ef2b2d',
+  transfer: '#f97316',
+  stay: '#94a3b8',
+  co_travel: '#e8eaed',
+  owns: '#64748b',
+  mention: '#475569',
+  ad_response: '#dc2626',
 };
 
 export const Network = () => {
@@ -174,36 +174,44 @@ export const Network = () => {
     });
 
     const cyNodes = activeNodes.map(n => {
-      const isBroker = n.id === 'P-BROKER-01';
-      const isBurner = n.id === 'PH-BURNER-01';
-      const isMissing = n.type === 'person' && n.id.startsWith('MP-');
+      const isBroker = n.is_broker || (n.betweenness && n.betweenness > 0.3) || n.id === 'ENT-R0019' || n.priority > 0.85;
+      const isBurner = n.role_label?.toLowerCase().includes('burner') || n.type === 'phone' && n.priority > 0.8;
+      const isMissing = n.type === 'person' && (n.id.startsWith('MP-') || n.role_label?.toLowerCase().includes('missing'));
+      const isDecoy = n.role_label?.toLowerCase().includes('decoy') || n.id === 'ENT-R0022';
       const isAlert = n.priority >= 0.85;
 
-      let componentColor = COMMUNITY_COLORS[n.community] || '#64748b';
-      if (simResult && removedNodeId) {
-        // Shatter recoloring
-        if (n.community === 1) componentColor = '#0d9488';
-        else if (n.community === 2) componentColor = '#f59e0b';
-        else if (n.community === 5) componentColor = '#8b5cf6';
+      let componentColor = COMMUNITY_COLORS[n.community] || '#94a3b8';
+      if (isBroker) componentColor = '#ef2b2d';
+      else if (simResult && removedNodeId) {
+        if (n.community === 1) componentColor = '#ef2b2d';
+        else if (n.community === 2) componentColor = '#f97316';
         else componentColor = '#64748b';
       }
+
+      // Clamp node size to 16-44 px based on priority
+      const clampedSize = Math.max(16, Math.min(44, 16 + (n.priority || 0) * 28));
+      // Truncate label to 14 chars
+      const rawLabel = n.label || n.id || '';
+      const truncatedLabel = rawLabel.length > 14 ? rawLabel.slice(0, 14) + '…' : rawLabel;
 
       return {
         data: {
           id: n.id,
-          label: n.label,
+          label: truncatedLabel,
+          full_label: rawLabel,
           type: n.type,
           priority: n.priority,
           role_label: n.role_label,
           community: n.community,
           color: componentColor,
-          size: Math.max(30, Math.min(68, n.priority * 64 + 18)),
+          size: clampedSize,
           isBroker,
           isBurner,
           isMissing,
+          isDecoy,
           isAlert,
-          borderWidth: isBroker || isAlert ? 3 : 1.5,
-          borderColor: isBroker ? '#ec4899' : isAlert ? '#f43f5e' : '#1e293b'
+          borderWidth: isBroker ? 3.5 : isDecoy ? 2.5 : isAlert ? 2 : 1,
+          borderColor: isBroker ? '#ef2b2d' : isDecoy ? '#f59e0b' : isAlert ? '#f87171' : '#2b1416'
         }
       };
     });
@@ -216,7 +224,7 @@ export const Network = () => {
         type: e.type,
         score: e.score,
         edge_kind: e.edge_kind,
-        width: Math.max(1.2, e.score * 4.5),
+        width: Math.max(1, Math.min(4, (e.score || 0.5) * 4)),
         lineStyle: e.edge_kind === 'observed' ? 'solid' : e.edge_kind === 'inferred' ? 'dashed' : 'dotted',
         color: EDGE_COLORS[e.type] || '#475569'
       }
@@ -337,9 +345,20 @@ export const Network = () => {
       selector: 'node[isBroker]',
       style: {
         'shape': 'diamond',
+        'background-color': '#ef2b2d',
+        'border-color': '#ffffff',
+        'border-width': 3,
         'shadow-blur': 25,
-        'shadow-color': '#ec4899',
-        'shadow-opacity': 0.85,
+        'shadow-color': '#ef2b2d',
+        'shadow-opacity': 0.9,
+      }
+    },
+    {
+      selector: 'node[isDecoy]',
+      style: {
+        'border-color': '#f59e0b',
+        'border-width': 2.5,
+        'border-style': 'dashed',
       }
     },
     {
@@ -545,7 +564,15 @@ export const Network = () => {
             layout={layoutConfig}
             stylesheet={stylesheet}
             cy={(cy) => {
-              cyRef.current = cy;
+              if (cyRef.current !== cy) {
+                cyRef.current = cy;
+                setTimeout(() => {
+                  try {
+                    cy.layout(layoutConfig).run();
+                    cy.fit(undefined, 40);
+                  } catch (e) {}
+                }, 150);
+              }
             }}
             className="cytoscape-canvas-container"
           />

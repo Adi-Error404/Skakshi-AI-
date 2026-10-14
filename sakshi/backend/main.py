@@ -7,6 +7,13 @@ from typing import Optional, List, Dict, Any, Set
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load .env from backend directory and project root
+_curr_dir = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(os.path.dirname(_curr_dir), ".env"))
+load_dotenv(os.path.join(_curr_dir, ".env"))
+load_dotenv()
 
 from db import get_connection, verify_all_integrity, tamper_working_db, restore_clean_db
 from ledger import get_ledger_state, record_action
@@ -399,10 +406,58 @@ def generate_report(user: Dict[str, Any] = Depends(require_roles(["head_constabl
     report_id = "RPT-SP014-01"
     # Pre-build PDF and log to ledger
     build_pdf_dossier(conn, user, report_id)
+
+    # Detailed structured intelligence report payload for UI dossier
+    g = get_graph_instance()
+    total_nodes = len(g.nx_graph.nodes) if g else 0
+    total_edges = len(g.nx_graph.edges) if g else 0
+    density = round(len(g.nx_graph.edges) / (total_nodes * (total_nodes - 1) / 2), 4) if total_nodes > 1 else 0
+
+    top_entities = []
+    if g:
+        for nid, d in g.nx_graph.nodes(data=True):
+            top_entities.append({
+                "id": nid,
+                "label": d.get("label", nid),
+                "type": d.get("type", "entity"),
+                "betweenness": round(d.get("betweenness", 0.0), 4),
+                "pagerank": round(d.get("pagerank", 0.0), 4),
+                "degree": g.nx_graph.degree(nid)
+            })
+        top_entities.sort(key=lambda x: x["betweenness"], reverse=True)
+
+    alerts_list = generate_alerts(conn)
+    ledger_state = get_ledger_state(conn)
+
+    top_broker_id = top_entities[0]["id"] if top_entities else "ENT-R0019"
+    sim_res = simulate_node_removal(top_broker_id)
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM persons")
+    persons_cnt = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM calls")
+    calls_cnt = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM transactions")
+    txns_cnt = cursor.fetchone()[0]
+
     return {
         "report_id": report_id,
         "status": "ready",
-        "url": f"/api/report/{report_id}/download"
+        "url": f"/api/report/{report_id}/download",
+        "counts": {
+            "entities": total_nodes,
+            "edges": total_edges,
+            "density": density,
+            "persons": persons_cnt,
+            "calls": calls_cnt,
+            "transactions": txns_cnt,
+            "alerts": len(alerts_list)
+        },
+        "top_entities": top_entities[:5],
+        "alerts": alerts_list[:6],
+        "simulation": sim_res,
+        "ledger_head_hash": ledger_state.get("head_hash", ""),
+        "ledger_blocks": len(ledger_state.get("entries", []))
     }
 
 @app.get("/api/report/{report_id}/download")
@@ -477,7 +532,8 @@ def health():
     return {
         "status": "ok",
         "version": "2.0.0",
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip())
     }
 
 # 16. VALIDATION (Roles: cyber_cell, sp_dysp, auditor)

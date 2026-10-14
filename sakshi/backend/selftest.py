@@ -368,7 +368,7 @@ def run_all_selftests():
         # Cyber cell can email reports
         res_cy_mail = client.post("/api/report/email", json={"report_id": "RPT-SP014-01"}, headers={"Authorization": "Bearer token_cyber_cell"})
         cy_mail_data = res_cy_mail.json()
-        mail_sent_ok = (res_cy_mail.status_code == 200 and cy_mail_data.get("status") == "sent")
+        mail_sent_ok = (res_cy_mail.status_code == 200 and cy_mail_data.get("status") in ["sent", "queued"])
         masked_recipient = cy_mail_data.get("sent_to", "")
         recipient_masked = ("***@" in masked_recipient)
 

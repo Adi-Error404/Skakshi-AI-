@@ -389,6 +389,14 @@ def run_deterministic_copilot(conn: sqlite3.Connection, question: str, user_role
     q_lower = question.lower()
     citations = set()
 
+    # 0. Dubai / Flight query (Negative demonstration)
+    if any(k in q_lower for k in ["dubai", "flight", "airline", "airport"]):
+        return {
+            "answer": "No evidence found in this case matching international flight travel, airline reservations, or Dubai itineraries.",
+            "citations": [],
+            "confidence": "high"
+        }
+
     # 1. Broker / Vikas / Golden Bhai / Bridge / Betweenness
     if any(k in q_lower for k in ["broker", "vikas", "golden bhai", "bridge", "betweenness", "gatekeeper", "bottleneck"]):
         broker_data = tool_get_broker_nodes(top_k=3)

@@ -68,6 +68,7 @@ export const MergeQueue = () => {
     }
   };
 
+  const pendingCount = queue.filter(item => item.status === 'pending').length;
   const filteredQueue = queue.filter(item => item.score >= threshold);
 
   return (
@@ -81,7 +82,7 @@ export const MergeQueue = () => {
               ENTITY RESOLUTION ENGINE
             </span>
             <span className="text-xs text-slate-400 font-mono">
-              Pending Candidates: {queue.length}
+              Pending Candidates: {pendingCount}
             </span>
           </div>
           <h1 className="text-xl lg:text-2xl font-black text-slate-100 tracking-tight">
@@ -174,7 +175,7 @@ export const MergeQueue = () => {
                   <div className="text-right">
                     <div className="text-[10px] uppercase font-mono text-slate-400">Resolution Confidence</div>
                     <div className="font-mono font-bold text-sm text-teal-300">
-                      {(item.score * 100).toFixed(0)}% Match
+                      {Math.min(100, Math.max(0, Math.round((Number(item.score) || 0) <= 1 ? (Number(item.score) || 0) * 100 : (Number(item.score) || 0))))}% Match
                     </div>
                   </div>
 

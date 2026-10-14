@@ -216,7 +216,7 @@ export const Ledger = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
-              {ledger?.entries?.map((e) => {
+              {[...(ledger?.entries || [])].sort((a, b) => a.idx - b.idx).map((e) => {
                 const isBroken = e.tampered || (isTampered && e.idx === 17);
 
                 return (

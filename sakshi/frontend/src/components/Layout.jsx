@@ -21,7 +21,7 @@ import {
   X
 } from 'lucide-react';
 import { useAuth, SEED_USERS } from '../context/AuthContext';
-import { verifyLedgerApi } from '../api';
+import { verifyLedgerApi, getAlertsApi, getMergeQueueApi } from '../api';
 
 export const Layout = () => {
   const { user, logout, switchRoleDirectly, debugMode, setDebugMode } = useAuth();
@@ -30,6 +30,23 @@ export const Layout = () => {
   const [ledgerStatus, setLedgerStatus] = useState({ ok: true, verifying: false });
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
+  const [counts, setCounts] = useState({ alerts: null, mergeQueue: null });
+
+  const fetchCounts = async () => {
+    try {
+      const [alertsRes, mqRes] = await Promise.all([
+        getAlertsApi(),
+        getMergeQueueApi()
+      ]);
+      const pendingMq = Array.isArray(mqRes) ? mqRes.filter(item => item.status === 'pending').length : null;
+      setCounts({
+        alerts: Array.isArray(alertsRes) ? alertsRes.length : null,
+        mergeQueue: pendingMq
+      });
+    } catch {
+      // fallback
+    }
+  };
 
   const checkChain = async () => {
     setLedgerStatus(prev => ({ ...prev, verifying: true }));
@@ -43,9 +60,13 @@ export const Layout = () => {
 
   useEffect(() => {
     checkChain();
-    const interval = setInterval(checkChain, 20000);
+    fetchCounts();
+    const interval = setInterval(() => {
+      checkChain();
+      fetchCounts();
+    }, 12000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.role]);
 
   useEffect(() => {
     const handleRbacDenied = (e) => {
@@ -59,9 +80,9 @@ export const Layout = () => {
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
     { to: '/network', label: 'Network Graph', icon: Network, highlight: true },
-    { to: '/merge-queue', label: 'Merge Queue', icon: GitMerge, badge: '2' },
+    { to: '/merge-queue', label: 'Merge Queue', icon: GitMerge, badge: counts.mergeQueue !== null ? String(counts.mergeQueue) : undefined },
     { to: '/golden-hour', label: 'Golden Hour Map', icon: Clock },
-    { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: '8' },
+    { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: counts.alerts !== null ? String(counts.alerts) : undefined },
     { to: '/copilot', label: 'Ask the Graph', icon: Bot },
     { to: '/report', label: 'Case Dossier', icon: FileSpreadsheet },
     { to: '/ledger', label: 'Chain of Custody', icon: ShieldCheck, rbac: ['cyber_cell', 'sp_dysp', 'auditor'] },
@@ -235,7 +256,7 @@ export const Layout = () => {
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium transition group relative ${
                       isActive
-                        ? 'bg-teal-500/15 text-teal-300 border border-teal-500/30 font-semibold'
+                        ? 'active-nav-item border-l-4 border-l-red-500 bg-red-950/40 text-white font-semibold'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                     } ${item.highlight && !location.pathname.includes(item.to) ? 'text-slate-200' : ''}`
                   }
@@ -243,7 +264,7 @@ export const Layout = () => {
                   <Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="hidden lg:inline">{item.label}</span>
                   {item.badge && (
-                    <span className="hidden lg:inline-block ml-auto px-1.5 py-0.2 rounded text-[10px] font-mono bg-slate-800 text-teal-400 border border-slate-700">
+                    <span className="hidden lg:inline-block ml-auto px-1.5 py-0.2 rounded text-[10px] font-mono bg-red-950 text-red-300 border border-red-800/80 font-bold">
                       {item.badge}
                     </span>
                   )}

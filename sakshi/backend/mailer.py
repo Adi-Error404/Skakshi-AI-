@@ -102,10 +102,11 @@ def send_report_email(
         ts=now_iso
     )
 
+    status_val = "sent" if send_mode == "smtp_live" else "queued"
     return {
         "report_id": report_id,
         "sent_to": masked_target,
-        "status": "sent",
+        "status": status_val,
         "mode": send_mode,
-        "message": f"Intelligence dossier {report_id} successfully dispatched to {masked_target}."
+        "message": f"Intelligence dossier {report_id} successfully {status_val} to {masked_target}."
     }

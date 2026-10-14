@@ -14,12 +14,10 @@ import { askCopilotApi } from '../api';
 import EvidenceModal from '../components/EvidenceModal';
 
 const SUGGESTED_QUESTIONS = [
-  "What is the role of entity Vikas S. / Golden Bhai in bridging clusters?",
-  "Summarize the burner phone timeline during the disappearance windows.",
-  "Detail the pass-through bank accounts and fund transfer velocity.",
-  "What pattern links the 5 missing persons to the job advertisement?",
-  "What anomalous vehicle sightings occurred at Kumhari Toll Plaza NH-53?",
-  "Why was shopkeeper Ramesh Gupta classified as a decoy node?"
+  "Who links the two groups?",
+  "Summarize the missing-person cluster",
+  "Which accounts show rapid pass-through?",
+  "Show flights to Dubai"
 ];
 
 export const AskCopilot = () => {
@@ -27,8 +25,8 @@ export const AskCopilot = () => {
     {
       role: 'assistant',
       text: "Investigative Copilot online. I analyze structured evidence citations, graph centrality, and telemetry logs for Case SP-014 (Durg Missing Cluster). All answers are grounded strictly in evidentiary artifacts.",
-      citations: ["CDR-0012", "FIR-07-S3"],
-      confidence: "high"
+      citations: [],
+      confidence: null
     }
   ]);
   const [inputQuery, setInputQuery] = useState('');
@@ -176,9 +174,9 @@ export const AskCopilot = () => {
               >
                 {!isUser && m.confidence && (
                   <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800/80">
-                    <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-teal-400 flex items-center gap-1">
-                      <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
-                      Section 65B Defensible Answer
+                    <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-red-400 flex items-center gap-1 font-heading">
+                      <ShieldCheck className="w-3.5 h-3.5 text-red-500" />
+                      Cited Answer
                     </span>
                     <span className={`px-1.5 py-0.2 rounded text-[9px] uppercase font-mono font-bold ${
                       m.confidence === 'high' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
