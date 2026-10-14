@@ -296,6 +296,96 @@ def run_all_selftests():
         results.append(("10. RBAC: constable gets 403 & masked phone; sp_dysp can unmask", False, str(e)))
 
     # -------------------------------------------------------------
+    # Check 11: Groq Copilot: query returns answer, citations, confidence, phone masking & ledger logging
+    # -------------------------------------------------------------
+    try:
+        # Step A: Cyber Cell asks investigative question
+        q1 = "What is the role of entity Vikas S. / Golden Bhai in bridging clusters?"
+        res_cop1 = client.post("/api/copilot", json={"question": q1}, headers={"Authorization": "Bearer token_cyber_cell"})
+        cop1_data = res_cop1.json()
+        has_answer = len(cop1_data.get("answer", "")) > 50
+        has_citations = len(cop1_data.get("citations", [])) >= 1
+        has_confidence = cop1_data.get("confidence") in ["high", "medium"]
+
+        # Step B: Constable asks question containing phone number -> phone must be masked
+        q2 = "What phone numbers are linked to the job ad?"
+        res_cop2 = client.post("/api/copilot", json={"question": q2}, headers={"Authorization": "Bearer token_constable"})
+        c_answer = res_cop2.json().get("answer", "")
+        c_phone_masked = "XXXXX" in c_answer
+
+        # Step C: Ledger has recorded COPILOT_QUERY
+        cursor.execute("SELECT COUNT(*) FROM ledger WHERE action LIKE 'COPILOT_QUERY%'")
+        cop_ledger_count = cursor.fetchone()[0]
+
+        pass_11 = (res_cop1.status_code == 200 and has_answer and has_citations and has_confidence and c_phone_masked and cop_ledger_count > 0)
+        detail_11 = (
+            f"Copilot 200: {res_cop1.status_code == 200}; Answer len: {len(cop1_data.get('answer', ''))}; "
+            f"Citations: {cop1_data.get('citations')}; Phone masked for constable: {c_phone_masked}; "
+            f"Ledger entries logged: {cop_ledger_count}"
+        )
+        results.append(("11. Groq Copilot: evidence-grounded Q&A, citations, phone masking, ledger log", pass_11, detail_11))
+    except Exception as e:
+        results.append(("11. Groq Copilot: evidence-grounded Q&A, citations, phone masking, ledger log", False, str(e)))
+
+    # -------------------------------------------------------------
+    # Check 12: PDF Report Generator: Section 65B format, valid PDF bytes & ledger logging
+    # -------------------------------------------------------------
+    try:
+        res_rep = client.post("/api/report", headers={"Authorization": "Bearer token_cyber_cell"})
+        rep_data = res_rep.json()
+        rep_id = rep_data.get("report_id")
+        rep_url = rep_data.get("url")
+        rep_ready = rep_data.get("status") == "ready"
+
+        # Download the PDF
+        res_dl = client.get(rep_url, headers={"Authorization": "Bearer token_cyber_cell"})
+        pdf_bytes = res_dl.content
+        pdf_valid = pdf_bytes.startswith(b"%PDF")
+        pdf_size_ok = len(pdf_bytes) > 4000
+        ct_ok = "application/pdf" in res_dl.headers.get("content-type", "")
+
+        # Check ledger has REPORT_EXPORT
+        cursor.execute("SELECT COUNT(*) FROM ledger WHERE action LIKE 'REPORT_EXPORT%'")
+        rep_ledger_count = cursor.fetchone()[0]
+
+        pass_12 = (res_rep.status_code == 200 and rep_ready and pdf_valid and pdf_size_ok and ct_ok and rep_ledger_count > 0)
+        detail_12 = (
+            f"Report ready: {rep_ready} ({rep_id}); Download status: {res_dl.status_code}; "
+            f"Valid PDF header: {pdf_valid}; PDF size: {len(pdf_bytes)} bytes; Ledger entries: {rep_ledger_count}"
+        )
+        results.append(("12. Detailed Report: Section 65B dossier, valid PDF bytes, ledger log", pass_12, detail_12))
+    except Exception as e:
+        results.append(("12. Detailed Report: Section 65B dossier, valid PDF bytes, ledger log", False, str(e)))
+
+    # -------------------------------------------------------------
+    # Check 13: Report Email: status sent with masked email, blocks constable with 403 & ledger logging
+    # -------------------------------------------------------------
+    try:
+        # Constable is blocked from emailing reports
+        res_c_mail = client.post("/api/report/email", json={"report_id": "RPT-SP014-01"}, headers={"Authorization": "Bearer token_constable"})
+        mail_blocked_for_constable = (res_c_mail.status_code == 403)
+
+        # Cyber cell can email reports
+        res_cy_mail = client.post("/api/report/email", json={"report_id": "RPT-SP014-01"}, headers={"Authorization": "Bearer token_cyber_cell"})
+        cy_mail_data = res_cy_mail.json()
+        mail_sent_ok = (res_cy_mail.status_code == 200 and cy_mail_data.get("status") == "sent")
+        masked_recipient = cy_mail_data.get("sent_to", "")
+        recipient_masked = ("***@" in masked_recipient)
+
+        # Check ledger has REPORT_EMAIL
+        cursor.execute("SELECT COUNT(*) FROM ledger WHERE action LIKE 'REPORT_EMAIL%'")
+        mail_ledger_count = cursor.fetchone()[0]
+
+        pass_13 = (mail_blocked_for_constable and mail_sent_ok and recipient_masked and mail_ledger_count > 0)
+        detail_13 = (
+            f"Constable blocked (403): {mail_blocked_for_constable}; Email sent: {mail_sent_ok}; "
+            f"Recipient masked: '{masked_recipient}'; Ledger entries: {mail_ledger_count}"
+        )
+        results.append(("13. Report Email: RBAC protection (403), masked recipient, ledger log", pass_13, detail_13))
+    except Exception as e:
+        results.append(("13. Report Email: RBAC protection (403), masked recipient, ledger log", False, str(e)))
+
+    # -------------------------------------------------------------
     # PRINT SUMMARY
     # -------------------------------------------------------------
     print("\n" + "=" * 70)
