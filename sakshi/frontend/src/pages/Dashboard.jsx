@@ -13,15 +13,14 @@ import {
   TrendingUp,
   ExternalLink
 } from 'lucide-react';
-import { getCaseApi, getAlertsApi, getGoldenHourApi, getMergeQueueApi } from '../api';
+import { getSummaryApi, getAlertsApi, getGoldenHourApi } from '../api';
 import EvidenceModal from '../components/EvidenceModal';
 import MapBackdrop from '../components/MapBackdrop';
 
 export const Dashboard = () => {
-  const [caseData, setCaseData] = useState(null);
+  const [summary, setSummary] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [goldenHour, setGoldenHour] = useState(null);
-  const [mergeQueueCount, setMergeQueueCount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedEvidence, setSelectedEvidence] = useState(null);
   const navigate = useNavigate();
@@ -29,18 +28,14 @@ export const Dashboard = () => {
   useEffect(() => {
     const fetchDashboard = async () => {
       try {
-        const [c, a, gh, mq] = await Promise.all([
-          getCaseApi(), 
+        const [sum, a, gh] = await Promise.all([
+          getSummaryApi(), 
           getAlertsApi(),
-          getGoldenHourApi(),
-          getMergeQueueApi()
+          getGoldenHourApi()
         ]);
-        setCaseData(c);
+        setSummary(sum);
         setAlerts(Array.isArray(a) ? a : []);
         setGoldenHour(gh);
-        if (Array.isArray(mq)) {
-          setMergeQueueCount(mq.filter(item => item.status === 'pending').length);
-        }
       } catch (err) {
         console.error("Dashboard data load error:", err);
       } finally {
@@ -125,14 +120,14 @@ export const Dashboard = () => {
         </div>
       </div>
 
-      {/* 4 Metric Cards with Real API Counts */}
+      {/* 4 Metric Cards with Real API Counts from /api/summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-red-950/40 border border-red-900/50 flex items-center justify-center text-red-400">
             <Users className="w-6 h-6" />
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono text-slate-100">{caseData?.persons || 66}</div>
+            <div className="text-2xl font-bold font-mono text-slate-100">{summary?.entities ?? 63}</div>
             <div className="text-xs text-slate-400 uppercase tracking-wider font-medium">Entities Cataloged</div>
           </div>
         </div>
@@ -142,7 +137,7 @@ export const Dashboard = () => {
             <PhoneCall className="w-6 h-6" />
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono text-slate-100">{caseData?.calls || 400}</div>
+            <div className="text-2xl font-bold font-mono text-slate-100">{summary?.calls ?? 400}</div>
             <div className="text-xs text-slate-400 uppercase tracking-wider font-medium">CDR Interactions</div>
           </div>
         </div>
@@ -152,7 +147,7 @@ export const Dashboard = () => {
             <CreditCard className="w-6 h-6" />
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono text-slate-100">{caseData?.txns || 150}</div>
+            <div className="text-2xl font-bold font-mono text-slate-100">{summary?.transactions ?? 150}</div>
             <div className="text-xs text-slate-400 uppercase tracking-wider font-medium">Bank Transactions</div>
           </div>
         </div>
@@ -162,7 +157,7 @@ export const Dashboard = () => {
             <AlertTriangle className="w-6 h-6" />
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono text-red-400">{alerts.length}</div>
+            <div className="text-2xl font-bold font-mono text-red-400">{summary?.alerts_total ?? alerts.length}</div>
             <div className="text-xs text-slate-400 uppercase tracking-wider font-medium">Active Anomalies</div>
           </div>
         </div>
@@ -184,7 +179,7 @@ export const Dashboard = () => {
                 onClick={() => navigate('/alerts')}
                 className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1 font-semibold"
               >
-                <span>View All {alerts.length} Alerts</span>
+                <span>View All {summary?.alerts_total ?? alerts.length} Alerts</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -276,7 +271,7 @@ export const Dashboard = () => {
                 <div className="flex items-center justify-between mb-1">
                   <div className="font-semibold text-xs text-slate-200 group-hover:text-amber-300 flex items-center gap-2">
                     <GitMerge className="w-4 h-4 text-amber-400" />
-                    <span>Resolve Alias Merges ({mergeQueueCount !== null ? mergeQueueCount : 'Pending'})</span>
+                    <span>Resolve Alias Merges ({summary?.pending_merges !== undefined && summary?.pending_merges !== null ? summary.pending_merges : '0'})</span>
                   </div>
                   <ArrowRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400 transition transform group-hover:translate-x-0.5" />
                 </div>

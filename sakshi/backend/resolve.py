@@ -157,7 +157,7 @@ def compute_pair_score(p1: Dict[str, Any], p2: Dict[str, Any], contacts_map: Dic
             "value": -0.50
         })
 
-    final_score = max(0.0, round(score, 3))
+    final_score = min(1.0, max(0.0, round(score, 3)))
     return final_score, reasons
 
 def get_candidate_pairs(persons: List[Dict[str, Any]]) -> Set[Tuple[str, str]]:
@@ -333,9 +333,10 @@ def get_merge_queue_data(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
             "source": f"{p2.get('source_doc', 'Source')} (Address: {p2.get('address', 'N/A')})"
         }
 
+        clamped_score = min(1.0, max(0.0, score))
         queue.append({
             "id": m_id,
-            "score": round(score, 2),
+            "score": round(clamped_score, 2),
             "status": status,
             "records": [rec1, rec2],
             "reasons": json.loads(reasons_json)

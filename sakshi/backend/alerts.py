@@ -318,6 +318,38 @@ def generate_alerts(conn) -> List[Dict[str, Any]]:
             alert_idx += 1
             break
 
+    # ---------------- 8. Prompt Injection Attempts from Ledger ----------------
+    try:
+        main_c = get_connection().cursor()
+        main_c.execute("SELECT idx, payload_json, ts FROM ledger WHERE action LIKE '%injection_attempt%' ORDER BY idx ASC")
+        for i_row in main_c.fetchall():
+            lid, p_str, i_ts = i_row
+            try:
+                p_data = json.loads(p_str)
+            except Exception:
+                p_data = {}
+            rec_id = p_data.get("record_id", f"REC-INJ-{lid}")
+            alerts.append({
+                "id": f"ALT-INJ-{lid:02d}",
+                "type": "prompt_injection",
+                "severity": "critical",
+                "title": "Adversarial Prompt Injection Attempt Intercepted",
+                "explanation": f"Untrusted record {rec_id} contained adversarial directives ([instruction-like text removed]) intercepted before LLM exposure.",
+                "entity_ids": [],
+                "evidence_ids": [rec_id],
+                "ts": i_ts
+            })
+    except Exception:
+        pass
+
+    # ---------------- 9. Insider Threat Detection (rules + z-score) ----------------
+    try:
+        from insider_threat import detect_insider_threats
+        insider_alerts = detect_insider_threats(get_connection())
+        alerts.extend(insider_alerts)
+    except Exception:
+        pass
+
     return alerts
 
 def get_golden_hour_details(conn) -> Dict[str, Any]:

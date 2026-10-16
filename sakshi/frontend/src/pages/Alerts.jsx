@@ -8,14 +8,19 @@ import {
   Clock, 
   ArrowRight, 
   Network,
-  Search
+  Search,
+  Bug
 } from 'lucide-react';
-import { getAlertsApi } from '../api';
+import { getAlertsApi, getSummaryApi, simulateInsiderApi } from '../api';
+import { useAuth } from '../context/AuthContext';
 import EvidenceModal from '../components/EvidenceModal';
 
 export const Alerts = () => {
+  const { debugMode } = useAuth();
   const [alerts, setAlerts] = useState([]);
+  const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [simulating, setSimulating] = useState(false);
   const [filterSeverity, setFilterSeverity] = useState('all');
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -25,8 +30,12 @@ export const Alerts = () => {
   useEffect(() => {
     const fetchAlerts = async () => {
       try {
-        const data = await getAlertsApi();
+        const [data, sum] = await Promise.all([
+          getAlertsApi(),
+          getSummaryApi()
+        ]);
         setAlerts(data);
+        setSummary(sum);
       } catch (err) {
         console.error("Alerts fetch error:", err);
       } finally {
@@ -71,35 +80,58 @@ export const Alerts = () => {
               INVESTIGATIVE TRIAGE
             </span>
             <span className="text-xs text-slate-400 font-mono">
-              Total Active Anomalies: {alerts.length}
+              Total Active Anomalies: {summary?.alerts_total ?? alerts.length}
             </span>
           </div>
           <h1 className="text-xl lg:text-2xl font-black text-slate-100 tracking-tight">
             Patterns Worthy of Investigator Attention
           </h1>
           <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-            Algorithmic flags highlighting structural bottlenecks, velocity thresholds, proximity clusters, and decoy nodes. Prioritized for forensic validation under Section 65B compliance.
+            Algorithmic flags highlighting structural bottlenecks, velocity thresholds, proximity clusters, and decoy nodes. Prioritized for tamper-evident forensic validation.
           </p>
         </div>
 
         {/* Quick Severity Counts */}
+        {/* Quick Severity Counts & Debug Actions */}
         <div className="flex items-center gap-2">
+          {debugMode && (
+            <button
+              onClick={async () => {
+                setSimulating(true);
+                try {
+                  await simulateInsiderApi();
+                  await fetchAlerts();
+                } catch (err) {
+                  console.error('Simulation error:', err);
+                } finally {
+                  setSimulating(false);
+                }
+              }}
+              disabled={simulating}
+              className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 transition shadow-lg shadow-amber-950/40 disabled:opacity-50"
+              title="Append simulated adversary entries to ledger (DEBUG=1)"
+            >
+              <Bug className="w-3.5 h-3.5" />
+              <span>{simulating ? 'Simulating...' : 'Simulate insider behaviour'}</span>
+            </button>
+          )}
+
           <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-rose-800/60 text-center">
             <div className="text-[10px] text-slate-400 font-mono uppercase">High</div>
             <div className="text-sm font-bold font-mono text-rose-400">
-              {alerts.filter(a => a.severity === 'high').length}
+              {summary?.alerts_by_severity?.high ?? alerts.filter(a => a.severity === 'high' || a.severity === 'critical').length}
             </div>
           </div>
           <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-amber-800/60 text-center">
             <div className="text-[10px] text-slate-400 font-mono uppercase">Med</div>
             <div className="text-sm font-bold font-mono text-amber-400">
-              {alerts.filter(a => a.severity === 'med').length}
+              {summary?.alerts_by_severity?.medium ?? alerts.filter(a => a.severity === 'med' || a.severity === 'medium').length}
             </div>
           </div>
           <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-center">
             <div className="text-[10px] text-slate-400 font-mono uppercase">Low</div>
             <div className="text-sm font-bold font-mono text-slate-300">
-              {alerts.filter(a => a.severity === 'low').length}
+              {summary?.alerts_by_severity?.low ?? alerts.filter(a => a.severity === 'low').length}
             </div>
           </div>
         </div>
@@ -141,6 +173,8 @@ export const Alerts = () => {
             className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-teal-500"
           >
             <option value="all">All Anomaly Modalities</option>
+            <option value="insider_threat">Insider Threat (rules + z-score)</option>
+            <option value="prompt_injection">Prompt Injection Attempt</option>
             <option value="bridge_node">Bridge Node / Articulation</option>
             <option value="golden_hour">Golden Hour Proximity</option>
             <option value="pass_through">Pass-through Banking Relay</option>

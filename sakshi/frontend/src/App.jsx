@@ -12,11 +12,14 @@ import AskCopilot from './pages/AskCopilot';
 import Report from './pages/Report';
 import Ledger from './pages/Ledger';
 import Validation from './pages/Validation';
+import Landing from './pages/Landing';
+import Cases from './pages/Cases';
+import CrossCase from './pages/CrossCase';
 
 const ProtectedRoute = ({ children }) => {
   const { user } = useAuth();
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/" replace />;
   }
   return children;
 };
@@ -26,25 +29,31 @@ export const App = () => {
     <AuthProvider>
       <HashRouter>
         <Routes>
-          <Route path="/login" element={<Login />} />
+          {/* Public Landing Route */}
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Navigate to="/" replace />} />
+
+          {/* Protected Workbench Routes */}
           <Route
-            path="/"
             element={
               <ProtectedRoute>
                 <Layout />
               </ProtectedRoute>
             }
           >
-            <Route index element={<Dashboard />} />
-            <Route path="network" element={<Network />} />
-            <Route path="merge-queue" element={<MergeQueue />} />
-            <Route path="golden-hour" element={<GoldenHour />} />
-            <Route path="alerts" element={<Alerts />} />
-            <Route path="copilot" element={<AskCopilot />} />
-            <Route path="report" element={<Report />} />
-            <Route path="ledger" element={<Ledger />} />
-            <Route path="validation" element={<Validation />} />
+            <Route path="/cases" element={<Cases />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/network" element={<Network />} />
+            <Route path="/cross-case" element={<CrossCase />} />
+            <Route path="/merge-queue" element={<MergeQueue />} />
+            <Route path="/golden-hour" element={<GoldenHour />} />
+            <Route path="/alerts" element={<Alerts />} />
+            <Route path="/copilot" element={<AskCopilot />} />
+            <Route path="/report" element={<Report />} />
+            <Route path="/ledger" element={<Ledger />} />
+            <Route path="/validation" element={<Validation />} />
           </Route>
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </HashRouter>

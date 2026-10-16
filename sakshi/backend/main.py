@@ -7,15 +7,41 @@ from typing import Optional, List, Dict, Any, Set
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import sys
+import logging
 from dotenv import load_dotenv
 
-# Load .env from backend directory and project root
-_curr_dir = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(os.path.dirname(_curr_dir), ".env"))
-load_dotenv(os.path.join(_curr_dir, ".env"))
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("sakshi")
 
-from db import get_connection, verify_all_integrity, tamper_working_db, restore_clean_db
+# 1a. Explicit absolute path loading for .env
+_curr_dir = os.path.dirname(os.path.abspath(__file__))
+_sakshi_dir = os.path.dirname(_curr_dir)
+
+_env_paths = [
+    os.path.join(_sakshi_dir, ".env"),
+    os.path.join(_curr_dir, ".env")
+]
+
+for _p in _env_paths:
+    if os.path.isfile(_p):
+        load_dotenv(_p, override=True)
+
+# Sanitize every environment variable in os.environ
+for _k, _v in list(os.environ.items()):
+    if isinstance(_v, str):
+        _cleaned = _v.strip().replace("\r", "")
+        if (_cleaned.startswith('"') and _cleaned.endswith('"')) or (_cleaned.startswith("'") and _cleaned.endswith("'")):
+            _cleaned = _cleaned[1:-1].strip().replace("\r", "")
+        os.environ[_k] = _cleaned
+
+# Fail loudly if GROQ_API_KEY is empty after loading
+if not os.environ.get("GROQ_API_KEY"):
+    logger.error("CRITICAL CONFIGURATION ERROR: GROQ_API_KEY is empty or missing after loading .env!")
+    print("CRITICAL CONFIGURATION ERROR: GROQ_API_KEY is empty or missing after loading .env!", file=sys.stderr)
+
+import threading
+from db import get_connection, get_connection_for_case, verify_all_integrity, tamper_working_db, restore_clean_db, init_db
 from ledger import get_ledger_state, record_action
 from ingest import ingest_all
 from resolve import (
@@ -38,11 +64,27 @@ from auth import (
     verify_password
 )
 from validate import run_validation
-from copilot import process_copilot_query
+from copilot import process_copilot_query, check_copilot_health
 from report import build_pdf_dossier
-from mailer import send_report_email
+from mailer import send_report_email, send_demo_login_notice, mask_email
+from cross_case import get_visible_cross_case_links, decide_link
+import pyotp
+from totp_service import (
+    MFA_ROLES,
+    get_totp_secret_and_status,
+    generate_qr_data_uri,
+    generate_qr_data_uri_authenticator,
+    verify_totp,
+    set_totp_enrolled
+)
 
 app = FastAPI(title="SAKSHI Intelligence Workbench API", version="2.0.0")
+
+# Guarantee database schema is initialized
+try:
+    init_db(get_connection())
+except Exception as _e:
+    pass
 
 app.add_middleware(
     CORSMiddleware,
@@ -69,6 +111,13 @@ unmasked_entities: Set[str] = set()
 class LoginRequest(BaseModel):
     email: str
     password: str
+    totp_code: Optional[str] = None
+
+class DemoLoginRequest(BaseModel):
+    name: str
+    email: str
+    role: str
+    website: Optional[str] = None  # honeypot
 
 class RemoveNodeRequest(BaseModel):
     node_id: str
@@ -79,7 +128,285 @@ class CopilotRequest(BaseModel):
 class ReportEmailRequest(BaseModel):
     report_id: str
 
+class CrossCaseDecisionRequest(BaseModel):
+    decision: str
+
+def get_case_access(
+    case_id: Optional[str] = Header(None, alias="X-Case-Id"),
+    user: Dict[str, Any] = Depends(get_current_user)
+) -> str:
+    user_email = user.get("email", "").lower().strip()
+    user_role = user.get("role", "")
+
+    main_conn = get_connection()
+    cursor = main_conn.cursor()
+    cursor.execute("SELECT case_id FROM cases ORDER BY case_id ASC")
+    all_cases = [r[0] for r in cursor.fetchall()]
+
+    if user_role == "ig":
+        assigned_cases = all_cases
+    else:
+        cursor.execute("SELECT case_id FROM case_assignments WHERE user_email = ? ORDER BY case_id ASC", (user_email,))
+        assigned_cases = [r[0] for r in cursor.fetchall()]
+        if not assigned_cases:
+            if user_role == "sp_dysp_raipur":
+                assigned_cases = ["SP-021"]
+            else:
+                assigned_cases = ["SP-014"]
+
+    target_case = case_id if case_id else (assigned_cases[0] if assigned_cases else "SP-014")
+
+    if user_role != "ig" and target_case not in assigned_cases:
+        raise HTTPException(status_code=403, detail=f"Access denied to case {target_case}")
+
+    return target_case
+
+# 0. PUBLIC SUMMARY (Landing Page Counters)
+@app.get("/api/public/summary")
+def get_public_summary():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(DISTINCT entity_id) FROM entity_members")
+    entities_count = cursor.fetchone()[0]
+    if entities_count == 0:
+        g = get_graph_instance()
+        entities_count = len(g.nx_graph.nodes) if g else 66
+
+    cursor.execute("SELECT COUNT(*) FROM calls")
+    calls_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM transactions")
+    txns_count = cursor.fetchone()[0]
+
+    alerts_list = generate_alerts(conn)
+    alerts_count = len(alerts_list)
+
+    return {
+        "entities": entities_count,
+        "calls": calls_count,
+        "transactions": txns_count,
+        "alerts": alerts_count
+    }
+
+# SINGLE SOURCE OF TRUTH COUNTS FOR BENCH
+@app.get("/api/summary")
+def get_workbench_summary(
+    case_id: str = Depends(get_case_access),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    conn = get_connection_for_case(case_id)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(DISTINCT entity_id) FROM entity_members")
+    entities_count = cursor.fetchone()[0]
+    if entities_count == 0:
+        g = get_graph_instance(case_id)
+        entities_count = len(g.nx_graph.nodes) if g else 66
+
+    cursor.execute("SELECT COUNT(*) FROM calls")
+    calls_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM transactions")
+    txns_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM merge_decisions WHERE status = 'pending'")
+    pending_merges = cursor.fetchone()[0]
+
+    alerts_list = generate_alerts(conn)
+    alerts_total = len(alerts_list)
+    by_sev = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for a in alerts_list:
+        s = a.get("severity", "medium").lower()
+        if s == "med":
+            s = "medium"
+        by_sev[s] = by_sev.get(s, 0) + 1
+
+    main_conn = get_connection()
+    c_main = main_conn.cursor()
+    c_main.execute("""
+        SELECT COUNT(*) FROM cross_case_links
+        WHERE status = 'pending' AND (case_a = ? OR case_b = ?)
+    """, (case_id, case_id))
+    cross_case_pending = c_main.fetchone()[0]
+
+    return {
+        "case_id": case_id,
+        "alerts_total": alerts_total,
+        "alerts_by_severity": by_sev,
+        "pending_merges": pending_merges,
+        "cross_case_pending": cross_case_pending,
+        "entities": entities_count,
+        "calls": calls_count,
+        "transactions": txns_count
+    }
+
+@app.get("/api/cases")
+def list_cases(user: Dict[str, Any] = Depends(get_current_user)):
+    user_email = user.get("email", "").lower().strip()
+    user_role = user.get("role", "")
+
+    main_conn = get_connection()
+    cursor = main_conn.cursor()
+    cursor.execute("SELECT case_id, title, district, status FROM cases ORDER BY case_id ASC")
+    all_cases = cursor.fetchall()
+
+    if user_role == "ig":
+        visible_cases = all_cases
+    else:
+        cursor.execute("SELECT case_id FROM case_assignments WHERE user_email = ? ORDER BY case_id ASC", (user_email,))
+        assigned = {r[0] for r in cursor.fetchall()}
+        if not assigned:
+            if user_role == "sp_dysp_raipur":
+                assigned = {"SP-021"}
+            else:
+                assigned = {"SP-014"}
+        visible_cases = [c for c in all_cases if c[0] in assigned]
+
+    results = []
+    for c_id, title, district, status in visible_cases:
+        c_conn = get_connection_for_case(c_id)
+        c_cur = c_conn.cursor()
+        c_cur.execute("SELECT COUNT(DISTINCT entity_id) FROM entity_members")
+        ent_count = c_cur.fetchone()[0]
+        c_cur.execute("SELECT COUNT(*) FROM calls")
+        call_count = c_cur.fetchone()[0]
+        c_cur.execute("SELECT COUNT(*) FROM transactions")
+        txn_count = c_cur.fetchone()[0]
+        alerts = generate_alerts(c_conn)
+
+        cursor.execute("SELECT COUNT(*) FROM cross_case_links WHERE status = 'pending' AND (case_a = ? OR case_b = ?)", (c_id, c_id))
+        pending_links = cursor.fetchone()[0]
+
+        results.append({
+            "case_id": c_id,
+            "title": title,
+            "district": district,
+            "status": status,
+            "entities": ent_count,
+            "calls": call_count,
+            "transactions": txn_count,
+            "alerts": len(alerts),
+            "pending_links": pending_links
+        })
+    return results
+
+@app.get("/api/cross-case/links")
+def get_cross_case_links_endpoint(user: Dict[str, Any] = Depends(get_current_user)):
+    return get_visible_cross_case_links(user["email"], user["role"])
+
+@app.post("/api/cross-case/links/{link_id}/decision")
+def post_cross_case_decision(
+    link_id: str,
+    req: CrossCaseDecisionRequest,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    try:
+        return decide_link(link_id, req.decision, user["email"], user["role"])
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 # 1. AUTH
+@app.post("/api/auth/demo-login")
+def demo_login(req: DemoLoginRequest):
+    # Honeypot silent rejection
+    if req.website and req.website.strip():
+        fake_email = req.email.strip().lower() if req.email else "visitor@demo.in"
+        fake_role = "sp_dysp"
+        fake_token = create_jwt_token(fake_email, fake_role, req.name or "Visitor", demo=True)
+        return {
+            "token": fake_token,
+            "user": {"email": fake_email, "name": req.name or "Visitor", "role": fake_role, "demo": True},
+            "notice_status": "Login notice skipped (limit)"
+        }
+
+    name = (req.name or "").strip()
+    email = (req.email or "").strip().lower()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required.")
+    
+    if not email or "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    role_raw = (req.role or "").strip().lower()
+    if "cyber" in role_raw:
+        role = "cyber_cell"
+    elif "head" in role_raw:
+        role = "head_constable"
+    elif "constable" in role_raw:
+        role = "constable"
+    elif "auditor" in role_raw:
+        role = "auditor"
+    else:
+        role = "sp_dysp"
+
+    conn = get_connection()
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Upsert demo_visitors table
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM demo_visitors WHERE email = ?", (email,))
+    existing = cursor.fetchone()
+    if existing:
+        cursor.execute("UPDATE demo_visitors SET name = ?, last_login = ? WHERE email = ?", (name, now_iso, email))
+    else:
+        cursor.execute("INSERT INTO demo_visitors (name, email, created_at, last_login) VALUES (?, ?, ?, ?)", (name, email, now_iso, now_iso))
+    conn.commit()
+
+    token = create_jwt_token(email, role, name, demo=True)
+
+    # Write ledger entry "demo_login" with masked email only
+    masked = mask_email(email)
+    record_action(
+        conn,
+        "demo_login",
+        {"email": masked, "role": role, "demo": True},
+        ts=now_iso
+    )
+
+    # Rate limit check for demo notice emails:
+    # Max 1 per address per hour, global max 30 per hour, daily cap DEMO_EMAIL_DAILY_CAP (default 50)
+    now_ts = time.time()
+    cursor.execute("SELECT COUNT(*) FROM demo_email_log WHERE email = ? AND sent_at > ?", (email, now_ts - 3600))
+    addr_hour_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM demo_email_log WHERE sent_at > ?", (now_ts - 3600,))
+    global_hour_count = cursor.fetchone()[0]
+
+    daily_cap = int(os.environ.get("DEMO_EMAIL_DAILY_CAP", "50").strip() or "50")
+    cursor.execute("SELECT COUNT(*) FROM demo_email_log WHERE sent_at > ?", (now_ts - 86400,))
+    daily_count = cursor.fetchone()[0]
+
+    if addr_hour_count >= 1 or global_hour_count >= 30 or daily_count >= daily_cap:
+        notice_status = "Login notice skipped (limit)"
+    else:
+        cursor.execute("INSERT INTO demo_email_log (email, sent_at) VALUES (?, ?)", (email, now_ts))
+        conn.commit()
+
+        def bg_mail():
+            try:
+                send_demo_login_notice(email, name, role)
+            except Exception as e:
+                logger.warning(f"Background demo email error: {e}")
+
+        threading.Thread(target=bg_mail, daemon=True).start()
+        notice_status = "sent"
+
+    return {
+        "token": token,
+        "user": {
+            "email": email,
+            "name": name,
+            "role": role,
+            "demo": True
+        },
+        "notice_status": notice_status
+    }
+
 @app.post("/api/auth/login")
 def login(req: LoginRequest):
     email = req.email.lower().strip()
@@ -87,15 +414,63 @@ def login(req: LoginRequest):
     if not user or not verify_password(req.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials. Use demo password 'demo123'")
 
+    conn = get_connection()
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # On official sign-in, sp_dysp, sp_dysp_raipur and ig must enter a 6-digit TOTP code
+    if user["role"] in MFA_ROLES:
+        secret, enrolled = get_totp_secret_and_status(conn, email)
+
+        # Missing code returns QR containing 6-digit code plus current code
+        if not req.totp_code:
+            camera_qr_uri = generate_qr_data_uri(email, secret)
+            auth_qr_uri = generate_qr_data_uri_authenticator(email, secret)
+            totp = pyotp.TOTP(secret)
+            cur_code = totp.now()
+            rem_sec = 30 - (int(time.time()) % 30)
+            return {
+                "mfa_required": True,
+                "email": user["email"],
+                "name": user["name"],
+                "role": user["role"],
+                "enrolled": enrolled,
+                "secret": secret,
+                "current_code": cur_code,
+                "qr_code": camera_qr_uri,
+                "qr_code_auth": auth_qr_uri,
+                "expires_in": rem_sec,
+                "detail": f"Scan the QR code with your phone camera to display your 6-digit code: {cur_code}"
+            }
+
+        # Verify 6-digit code
+        if not verify_totp(secret, req.totp_code):
+            record_action(
+                conn,
+                f"MFA_FAILURE (Invalid TOTP code attempted for {user['email']})",
+                {"email": user["email"], "role": user["role"]},
+                ts=now_iso
+            )
+            raise HTTPException(status_code=401, detail="Invalid 6-digit MFA code")
+
+        # Mark enrolled on successful first verification
+        if not enrolled:
+            set_totp_enrolled(conn, email)
+
+        # Log MFA success
+        record_action(
+            conn,
+            f"MFA_SUCCESS (TOTP code verified for {user['email']})",
+            {"email": user["email"], "role": user["role"], "enrolled": enrolled},
+            ts=now_iso
+        )
+
     token = create_jwt_token(user["email"], user["role"], user["name"])
 
     # Record login in cryptographic ledger
-    conn = get_connection()
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     record_action(
         conn,
         f"USER_LOGIN (Authenticated session started for {user['email']})",
-        {"email": user["email"], "role": user["role"], "method": "jwt_pbkdf2"},
+        {"email": user["email"], "role": user["role"], "method": "jwt_pbkdf2_mfa" if user["role"] in MFA_ROLES else "jwt_pbkdf2"},
         ts=now_iso
     )
 
@@ -108,10 +483,43 @@ def login(req: LoginRequest):
         }
     }
 
+class MfaRefreshRequest(BaseModel):
+    email: str
+
+@app.post("/api/auth/mfa-refresh")
+def mfa_refresh(req: MfaRefreshRequest):
+    email = req.email.lower().strip()
+    user = USERS_DB.get(email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    conn = get_connection()
+    secret, enrolled = get_totp_secret_and_status(conn, email)
+    camera_qr_uri = generate_qr_data_uri(email, secret)
+    auth_qr_uri = generate_qr_data_uri_authenticator(email, secret)
+    totp = pyotp.TOTP(secret)
+    cur_code = totp.now()
+    rem_sec = 30 - (int(time.time()) % 30)
+    return {
+        "mfa_required": True,
+        "email": user["email"],
+        "name": user["name"],
+        "role": user["role"],
+        "enrolled": enrolled,
+        "secret": secret,
+        "current_code": cur_code,
+        "qr_code": camera_qr_uri,
+        "qr_code_auth": auth_qr_uri,
+        "expires_in": rem_sec,
+        "detail": f"Scan the QR code with your phone camera to display your 6-digit code: {cur_code}"
+    }
+
 # 2. CASE
 @app.get("/api/case")
-def get_case(user: Dict[str, Any] = Depends(get_current_user)):
-    conn = get_connection()
+def get_case(
+    case_id: str = Depends(get_case_access),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    conn = get_connection_for_case(case_id)
     cursor = conn.cursor()
 
     cursor.execute("SELECT count(distinct entity_id) FROM entity_members")
@@ -126,10 +534,17 @@ def get_case(user: Dict[str, Any] = Depends(get_current_user)):
 
     alerts_list = generate_alerts(conn)
 
+    main_conn = get_connection()
+    c_main = main_conn.cursor()
+    c_main.execute("SELECT title, status FROM cases WHERE case_id = ?", (case_id,))
+    row_case = c_main.fetchone()
+    title = row_case[0] if row_case else ("Durg Missing Cluster" if case_id == "SP-014" else "Raipur Fraud & Missing")
+    status = row_case[1] if row_case else "Open"
+
     return {
-        "case_id": "SP-014",
-        "title": "Durg Missing Cluster",
-        "status": "Open",
+        "case_id": case_id,
+        "title": title,
+        "status": status,
         "persons": ents_count,
         "calls": calls_count,
         "txns": txns_count,
@@ -138,10 +553,14 @@ def get_case(user: Dict[str, Any] = Depends(get_current_user)):
 
 # 3. GRAPH
 @app.get("/api/graph")
-def get_graph(until: Optional[str] = Query(None), user: Dict[str, Any] = Depends(get_current_user)):
-    kg = get_graph_instance()
+def get_graph(
+    case_id: str = Depends(get_case_access),
+    until: Optional[str] = Query(None),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    kg = get_graph_instance(case_id)
     graph_data = kg.get_graph_data(until)
-    is_sp = (user["role"] == "sp_dysp")
+    is_sp = (user["role"] in ("sp_dysp", "sp_dysp_raipur", "ig"))
 
     nodes = []
     for node in graph_data.get("nodes", []):
@@ -161,9 +580,13 @@ def get_graph(until: Optional[str] = Query(None), user: Dict[str, Any] = Depends
 
 # 4. ENTITY DETAILS
 @app.get("/api/entity/{entity_id}")
-def get_entity(entity_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    kg = get_graph_instance()
-    is_sp = (user["role"] == "sp_dysp")
+def get_entity(
+    entity_id: str,
+    case_id: str = Depends(get_case_access),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    kg = get_graph_instance(case_id)
+    is_sp = (user["role"] in ("sp_dysp", "sp_dysp_raipur", "ig"))
     is_unmasked = entity_id in unmasked_entities
 
     if entity_id in kg.entity_details:
@@ -199,11 +622,15 @@ def get_entity(entity_id: str, user: Dict[str, Any] = Depends(get_current_user))
 
     return ent
 
-# 5. UNMASK ENTITY (sp_dysp only)
+# 5. UNMASK ENTITY (sp_dysp, sp_dysp_raipur, ig)
 @app.post("/api/entity/{entity_id}/unmask")
-def unmask_entity(entity_id: str, user: Dict[str, Any] = Depends(require_roles(["sp_dysp"]))):
-    kg = get_graph_instance()
-    conn = get_connection()
+def unmask_entity(
+    entity_id: str,
+    case_id: str = Depends(get_case_access),
+    user: Dict[str, Any] = Depends(require_roles(["sp_dysp", "sp_dysp_raipur", "ig"]))
+):
+    kg = get_graph_instance(case_id)
+    conn = get_connection_for_case(case_id)
 
     raw_phone = ""
     if entity_id in kg.entity_details:
@@ -226,12 +653,13 @@ def unmask_entity(entity_id: str, user: Dict[str, Any] = Depends(require_roles([
 
     unmasked_entities.add(entity_id)
 
-    # Write unmask action to cryptographic ledger
+    # Write unmask action to cryptographic ledger with case_id in payload
+    main_conn = get_connection()
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     record_action(
-        conn,
-        f"PHONE_UNMASKED (Evidentiary phone unmasked for entity {entity_id} by {user['email']})",
-        {"entity_id": entity_id, "authorized_officer": user["email"], "role": user["role"]},
+        main_conn,
+        f"PHONE_UNMASKED (Evidentiary phone unmasked for entity {entity_id} in {case_id} by {user['email']})",
+        {"case_id": case_id, "entity_id": entity_id, "authorized_officer": user["email"], "role": user["role"]},
         ts=now_iso
     )
 
@@ -279,10 +707,13 @@ def explain_edge(source: str, target: str, user: Dict[str, Any] = Depends(get_cu
 
 # 7. MERGE QUEUE
 @app.get("/api/merge-queue")
-def get_merge_queue(user: Dict[str, Any] = Depends(get_current_user)):
-    conn = get_connection()
+def get_merge_queue(
+    case_id: str = Depends(get_case_access),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    conn = get_connection_for_case(case_id)
     queue = get_merge_queue_data(conn)
-    is_sp = (user["role"] == "sp_dysp")
+    is_sp = (user["role"] in ("sp_dysp", "sp_dysp_raipur", "ig"))
 
     result = []
     for item in queue:
@@ -304,7 +735,7 @@ def approve_merge(merge_id: str, user: Dict[str, Any] = Depends(get_current_user
     if user["role"] == "head_constable":
         res = propose_merge_decision(conn, merge_id, proposer=user["email"])
         return {"status": "proposed", "merge_id": merge_id, "detail": "Merge proposal submitted for SP/DySP review"}
-    elif user["role"] == "sp_dysp":
+    elif user["role"] in ("sp_dysp", "sp_dysp_raipur", "ig"):
         res = approve_merge_decision(conn, merge_id, reviewer=user["email"])
         rebuild_graph()
         return {"status": "approved", "merge_id": merge_id}
@@ -315,13 +746,13 @@ def approve_merge(merge_id: str, user: Dict[str, Any] = Depends(get_current_user
         )
 
 @app.post("/api/merge/{merge_id}/reject")
-def reject_merge(merge_id: str, user: Dict[str, Any] = Depends(require_roles(["sp_dysp"]))):
+def reject_merge(merge_id: str, user: Dict[str, Any] = Depends(require_roles(["sp_dysp", "sp_dysp_raipur", "ig"]))):
     conn = get_connection()
     res = reject_merge_decision(conn, merge_id, reviewer=user["email"])
     return {"status": "rejected", "merge_id": merge_id}
 
 @app.post("/api/merge/{merge_id}/unmerge")
-def unmerge_decision_endpoint(merge_id: str, user: Dict[str, Any] = Depends(require_roles(["sp_dysp"]))):
+def unmerge_decision_endpoint(merge_id: str, user: Dict[str, Any] = Depends(require_roles(["sp_dysp", "sp_dysp_raipur", "ig"]))):
     conn = get_connection()
     res = unmerge_decision(conn, merge_id, reviewer=user["email"])
     rebuild_graph()
@@ -329,15 +760,20 @@ def unmerge_decision_endpoint(merge_id: str, user: Dict[str, Any] = Depends(requ
 
 # 8. ALERTS
 @app.get("/api/alerts")
-def get_alerts(user: Dict[str, Any] = Depends(get_current_user)):
-    conn = get_connection()
+def get_alerts(
+    case_id: str = Depends(get_case_access),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    conn = get_connection_for_case(case_id)
     all_alerts = generate_alerts(conn)
-    is_sp = (user["role"] == "sp_dysp")
+    is_sp = (user["role"] in ("sp_dysp", "sp_dysp_raipur", "ig"))
 
-    # Constable sees summary alerts only (no raw tower-dump or deep financial pass-through)
+    # Constable sees summary alerts only; insider_threat is visible only to auditor, sp_dysp and ig
     if user["role"] == "constable":
-        restricted_types = {"pass_through", "structuring", "golden_hour", "burner"}
+        restricted_types = {"pass_through", "structuring", "golden_hour", "burner", "insider_threat"}
         filtered = [a for a in all_alerts if a["type"] not in restricted_types]
+    elif user["role"] not in ("auditor", "sp_dysp", "sp_dysp_raipur", "ig"):
+        filtered = [a for a in all_alerts if a["type"] != "insider_threat"]
     else:
         filtered = all_alerts
 
@@ -354,10 +790,10 @@ def get_alerts(user: Dict[str, Any] = Depends(get_current_user)):
 
 # 9. GOLDEN HOUR
 @app.get("/api/golden-hour")
-def get_golden_hour(user: Dict[str, Any] = Depends(require_roles(["cyber_cell", "sp_dysp", "auditor"]))):
+def get_golden_hour(user: Dict[str, Any] = Depends(require_roles(["cyber_cell", "sp_dysp", "sp_dysp_raipur", "ig", "auditor"]))):
     conn = get_connection()
     data = get_golden_hour_details(conn)
-    is_sp = (user["role"] == "sp_dysp")
+    is_sp = (user["role"] in ("sp_dysp", "sp_dysp_raipur", "ig"))
 
     result = dict(data)
     if not is_sp:
@@ -374,7 +810,7 @@ def get_golden_hour(user: Dict[str, Any] = Depends(require_roles(["cyber_cell", 
 
 # 10. SIMULATE REMOVE NODE
 @app.post("/api/simulate/remove-node")
-def simulate_remove(req: RemoveNodeRequest, user: Dict[str, Any] = Depends(require_roles(["head_constable", "cyber_cell", "sp_dysp"]))):
+def simulate_remove(req: RemoveNodeRequest, user: Dict[str, Any] = Depends(require_roles(["head_constable", "cyber_cell", "sp_dysp", "sp_dysp_raipur", "ig"]))):
     conn = get_connection()
     res = simulate_node_removal(req.node_id)
 
@@ -394,8 +830,19 @@ def get_timeline_range():
     return {"start": "2026-09-01", "end": "2026-09-30"}
 
 # 12. COPILOT
+@app.get("/api/health/copilot")
+def copilot_health(user: Dict[str, Any] = Depends(get_current_user)):
+    is_debug = os.environ.get("DEBUG", "0").strip().lower() in ("1", "true", "yes")
+    if not (is_debug or user.get("role") in ["sp_dysp", "sp_dysp_raipur", "ig", "cyber_cell"]):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied for role: {user.get('role')}. Requires sp_dysp, cyber_cell, or DEBUG=1"
+        )
+    conn = get_connection()
+    return check_copilot_health(conn)
+
 @app.post("/api/copilot")
-def copilot(req: CopilotRequest, user: Dict[str, Any] = Depends(require_roles(["constable", "head_constable", "cyber_cell", "sp_dysp", "auditor"]))):
+def copilot(req: CopilotRequest, user: Dict[str, Any] = Depends(require_roles(["constable", "head_constable", "cyber_cell", "sp_dysp", "sp_dysp_raipur", "ig", "auditor"]))):
     conn = get_connection()
     return process_copilot_query(conn, req.question, user)
 
@@ -504,6 +951,16 @@ def debug_reset():
 @app.post("/api/debug/reset-tamper")
 def debug_reset_tamper():
     return debug_reset()
+
+class SimulateInsiderRequest(BaseModel):
+    user_email: Optional[str] = "constable@demo.in"
+
+@app.post("/api/debug/simulate-insider")
+def debug_simulate_insider(req: Optional[SimulateInsiderRequest] = None):
+    from insider_threat import simulate_insider_behavior
+    target = req.user_email if (req and req.user_email) else "constable@demo.in"
+    conn = get_connection()
+    return simulate_insider_behavior(conn, target)
 
 # 15. CASE RELOAD & HEALTH
 @app.post("/api/case/reload")

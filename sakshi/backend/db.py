@@ -338,8 +338,89 @@ def init_db(conn: sqlite3.Connection):
         )
     """)
 
+    # Demo visitors and rate limit log
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS demo_visitors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            created_at TEXT NOT NULL,
+            last_login TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS demo_email_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            sent_at REAL NOT NULL
+        )
+    """)
+
+    # Multi-case registry and assignments
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cases (
+            case_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            district TEXT NOT NULL,
+            status TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS case_assignments (
+            user_email TEXT NOT NULL,
+            case_id TEXT NOT NULL,
+            PRIMARY KEY (user_email, case_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cross_case_stop_list (
+            identifier_hmac TEXT PRIMARY KEY,
+            identifier_val TEXT,
+            reason TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cross_case_links (
+            id TEXT PRIMARY KEY,
+            case_a TEXT NOT NULL,
+            case_b TEXT NOT NULL,
+            identifier_type TEXT NOT NULL,
+            identifier_hmac TEXT NOT NULL,
+            score REAL NOT NULL,
+            status TEXT NOT NULL,
+            metadata_json TEXT,
+            decided_by TEXT,
+            decided_at TEXT
+        )
+    """)
+
+    # Seed cases
+    cursor.execute("INSERT OR IGNORE INTO cases (case_id, title, district, status) VALUES ('SP-014', 'Durg Missing Cluster', 'Durg', 'Open')")
+    cursor.execute("INSERT OR IGNORE INTO cases (case_id, title, district, status) VALUES ('SP-021', 'Raipur Missing Cluster', 'Raipur', 'Open')")
+
+    # Seed assignments
+    assignments = [
+        ("constable@demo.in", "SP-014"),
+        ("headconstable@demo.in", "SP-014"),
+        ("spdysp@demo.in", "SP-014"),
+        ("cybercell@demo.in", "SP-014"),
+        ("cybercell@demo.in", "SP-021"),
+        ("spraipur@demo.in", "SP-021"),
+        ("ig@demo.in", "SP-014"),
+        ("ig@demo.in", "SP-021"),
+        ("auditor@demo.in", "SP-014"),
+        ("auditor@demo.in", "SP-021"),
+    ]
+    cursor.executemany("INSERT OR IGNORE INTO case_assignments (user_email, case_id) VALUES (?, ?)", assignments)
+
     init_ledger(conn)
     conn.commit()
+
+def get_connection_for_case(case_id: str) -> sqlite3.Connection:
+    if case_id == "SP-021":
+        p = Path(__file__).resolve().parent / "sakshi_sp021.db"
+        return get_connection(p)
+    return get_connection()
 
 def compute_row_hash(row_dict: Dict[str, Any]) -> str:
     """Computes deterministic SHA-256 hash for a table row dictionary."""

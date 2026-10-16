@@ -20,6 +20,8 @@ dist/
 *.log
 **/tasks/
 .system_generated/
+backups/
+**/backups/
 
 # IDE / System
 .vscode/

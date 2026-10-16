@@ -14,12 +14,13 @@ import {
   AlertCircle,
   Sparkles
 } from 'lucide-react';
-import { getMergeQueueApi, approveMergeApi, rejectMergeApi } from '../api';
+import { getMergeQueueApi, approveMergeApi, rejectMergeApi, getSummaryApi } from '../api';
 import { useAuth } from '../context/AuthContext';
 
 export const MergeQueue = () => {
   const { user, hasRole } = useAuth();
   const [queue, setQueue] = useState([]);
+  const [summary, setSummary] = useState(null);
   const [threshold, setThreshold] = useState(0.70);
   const [loading, setLoading] = useState(true);
   const [actionMessage, setActionMessage] = useState(null);
@@ -27,8 +28,12 @@ export const MergeQueue = () => {
 
   const fetchQueue = async () => {
     try {
-      const data = await getMergeQueueApi();
+      const [data, sum] = await Promise.all([
+        getMergeQueueApi(),
+        getSummaryApi()
+      ]);
       setQueue(data);
+      setSummary(sum);
     } catch (err) {
       console.error("Merge queue load error:", err);
     } finally {
@@ -82,7 +87,7 @@ export const MergeQueue = () => {
               ENTITY RESOLUTION ENGINE
             </span>
             <span className="text-xs text-slate-400 font-mono">
-              Pending Candidates: {pendingCount}
+              Pending Candidates: {summary?.pending_merges ?? pendingCount}
             </span>
           </div>
           <h1 className="text-xl lg:text-2xl font-black text-slate-100 tracking-tight">

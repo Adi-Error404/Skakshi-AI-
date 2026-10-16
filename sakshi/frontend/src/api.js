@@ -10,16 +10,28 @@ const apiClient = axios.create({
   },
 });
 
-// Attach Authorization Bearer token from sessionStorage or memory
+// Attach Authorization Bearer token from sessionStorage and X-Case-Id header
 apiClient.interceptors.request.use((config) => {
   const token = sessionStorage.getItem('sakshi_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  const caseId = sessionStorage.getItem('sakshi_case_id');
+  if (caseId) {
+    config.headers['X-Case-Id'] = caseId;
+  }
   return config;
 }, (error) => {
   return Promise.reject(error);
 });
+
+export const getActiveCaseId = () => sessionStorage.getItem('sakshi_case_id') || 'SP-014';
+export const setActiveCaseId = (caseId) => {
+  if (caseId) {
+    sessionStorage.setItem('sakshi_case_id', caseId);
+    window.dispatchEvent(new CustomEvent('sakshi-case-changed', { detail: { caseId } }));
+  }
+};
 
 export const authState = {
   getToken: () => sessionStorage.getItem('sakshi_token'),
@@ -42,13 +54,50 @@ export const authState = {
 };
 
 // API Services
-export const loginApi = async (email, password) => {
-  const res = await apiClient.post('/auth/login', { email, password });
+export const loginApi = async (email, password, totp_code = null) => {
+  const payload = { email, password };
+  if (totp_code) payload.totp_code = totp_code;
+  const res = await apiClient.post('/auth/login', payload);
+  return res.data;
+};
+
+export const refreshMfaApi = async (email) => {
+  const res = await apiClient.post('/auth/mfa-refresh', { email });
+  return res.data;
+};
+
+export const demoLoginApi = async (name, email, role, website = '') => {
+  const res = await apiClient.post('/auth/demo-login', { name, email, role, website });
+  return res.data;
+};
+
+export const getPublicSummaryApi = async () => {
+  const res = await apiClient.get('/public/summary');
+  return res.data;
+};
+
+export const getSummaryApi = async () => {
+  const res = await apiClient.get('/summary');
   return res.data;
 };
 
 export const getCaseApi = async () => {
   const res = await apiClient.get('/case');
+  return res.data;
+};
+
+export const getCasesApi = async () => {
+  const res = await apiClient.get('/cases');
+  return res.data;
+};
+
+export const getCrossCaseLinksApi = async () => {
+  const res = await apiClient.get('/cross-case/links');
+  return res.data;
+};
+
+export const decideCrossCaseLinkApi = async (id, decision) => {
+  const res = await apiClient.post(`/cross-case/links/${encodeURIComponent(id)}/decision`, { decision });
   return res.data;
 };
 
@@ -151,6 +200,11 @@ export const debugResetTamperApi = async () => {
 
 export const debugResetApi = async () => {
   const res = await apiClient.post('/debug/reset');
+  return res.data;
+};
+
+export const simulateInsiderApi = async (userEmail = 'constable@demo.in') => {
+  const res = await apiClient.post('/debug/simulate-insider', { user_email: userEmail });
   return res.data;
 };
 

@@ -110,3 +110,70 @@ def send_report_email(
         "mode": send_mode,
         "message": f"Intelligence dossier {report_id} successfully {status_val} to {masked_target}."
     }
+
+def send_demo_login_notice(
+    recipient_email: str,
+    recipient_name: str,
+    role: str
+) -> Dict[str, Any]:
+    """
+    Transmits an initial login notice email to a verified demo visitor.
+    If live SMTP credentials exist and function, sends via TLS SMTP.
+    Otherwise saves .eml to outbox/ without crashing and returns status 'queued'.
+    """
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    masked_target = mask_email(recipient_email)
+
+    subject = f"[SAKSHI] Demo Session Started - Case SP-014 ({role.upper()})"
+    body = (
+        f"OFFICIAL DEMO NOTICE - SAKSHI INTELLIGENCE WORKBENCH\n\n"
+        f"Visitor: {recipient_name} ({masked_target})\n"
+        f"Assigned Role: {role.upper()}\n"
+        f"Session Started: {now_iso}\n\n"
+        f"NOTICE: All data within Case SP-014 (Durg Missing Cluster) is strictly synthetic.\n"
+        f"Patterns identified are for investigative prioritization only and do not constitute formal accusations.\n\n"
+        f"SAKSHI Automated Crime Intelligence Workbench\n"
+        f"Cyber Crime Cell, District Police"
+    )
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["From"] = f"SAKSHI Intelligence System <{SMTP_USER or 'noreply@sakshi.gov.in'}>"
+    msg["To"] = recipient_email
+    msg["Subject"] = subject
+
+    send_mode = "simulated"
+    status_val = "queued"
+
+    if SMTP_USER and SMTP_APP_PASSWORD:
+        try:
+            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=8)
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_USER, SMTP_APP_PASSWORD)
+            server.sendmail(SMTP_USER, [recipient_email], msg.as_string())
+            server.quit()
+            send_mode = "smtp_live"
+            status_val = "sent"
+        except Exception:
+            send_mode = "simulated_fallback"
+            status_val = "queued"
+
+    if status_val == "queued":
+        try:
+            backend_dir = os.path.dirname(os.path.abspath(__file__))
+            sakshi_dir = os.path.dirname(backend_dir)
+            outbox_dir = os.path.join(sakshi_dir, "outbox")
+            os.makedirs(outbox_dir, exist_ok=True)
+            clean_email = re.sub(r'[^a-zA-Z0-9_.-]', '_', recipient_email)
+            file_name = f"{int(time.time())}_{clean_email}.eml"
+            file_path = os.path.join(outbox_dir, file_name)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(msg.as_string())
+        except Exception:
+            pass
+
+    return {
+        "status": status_val,
+        "mode": send_mode,
+        "sent_to": masked_target
+    }

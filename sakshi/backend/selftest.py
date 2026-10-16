@@ -386,6 +386,88 @@ def run_all_selftests():
         results.append(("13. Report Email: RBAC protection (403), masked recipient, ledger log", False, str(e)))
 
     # -------------------------------------------------------------
+    # Check 14: demo-login returns a JWT with the chosen role
+    # -------------------------------------------------------------
+    try:
+        from auth import decode_jwt_token
+        import time
+        test_email = f"officer_selftest_{int(time.time())}@gov.in"
+        res_dl = client.post("/api/auth/demo-login", json={
+            "name": "Officer Patel",
+            "email": test_email,
+            "role": "Head Constable",
+            "website": ""
+        })
+        dl_data = res_dl.json()
+        token = dl_data.get("token")
+        payload = decode_jwt_token(token) if token else {}
+
+        role_ok = (dl_data.get("user", {}).get("role") == "head_constable")
+        jwt_role_ok = (payload.get("role") == "head_constable")
+        jwt_demo_ok = (payload.get("demo") is True)
+        pass_14 = (res_dl.status_code == 200 and role_ok and jwt_role_ok and jwt_demo_ok)
+        detail_14 = f"Status: {res_dl.status_code}, User Role: {dl_data.get('user', {}).get('role')}, JWT Role: {payload.get('role')}, JWT Demo Claim: {payload.get('demo')}"
+        results.append(("14. demo-login returns a JWT with chosen role", pass_14, detail_14))
+    except Exception as e:
+        results.append(("14. demo-login returns a JWT with chosen role", False, str(e)))
+
+    # -------------------------------------------------------------
+    # Check 15: demo-login rate limit works
+    # -------------------------------------------------------------
+    try:
+        # Immediate second attempt with same email triggers the 1 email/addr/hr limit
+        res_rl = client.post("/api/auth/demo-login", json={
+            "name": "Officer Patel",
+            "email": test_email,
+            "role": "Head Constable",
+            "website": ""
+        })
+        rl_data = res_rl.json()
+        limit_triggered = (rl_data.get("notice_status") == "Login notice skipped (limit)")
+        pass_15 = (res_rl.status_code == 200 and limit_triggered)
+        detail_15 = f"Status: {res_rl.status_code}, Notice status: {rl_data.get('notice_status')}"
+        results.append(("15. demo-login rate limit works", pass_15, detail_15))
+    except Exception as e:
+        results.append(("15. demo-login rate limit works", False, str(e)))
+
+    # -------------------------------------------------------------
+    # Check 16: /api/summary numbers equal Alerts page and Merge Queue counts
+    # -------------------------------------------------------------
+    try:
+        res_sum = client.get("/api/summary", headers={"Authorization": "Bearer token_sp_dysp"})
+        sum_data = res_sum.json()
+
+        res_alerts = client.get("/api/alerts", headers={"Authorization": "Bearer token_sp_dysp"})
+        alerts_data = res_alerts.json()
+
+        res_mq = client.get("/api/merge-queue", headers={"Authorization": "Bearer token_sp_dysp"})
+        mq_data = res_mq.json()
+        mq_pending_count = len([m for m in mq_data if m.get("status") == "pending"])
+
+        alerts_match = (sum_data.get("alerts_total") == len(alerts_data))
+        mq_match = (sum_data.get("pending_merges") == mq_pending_count)
+        pass_16 = (res_sum.status_code == 200 and alerts_match and mq_match)
+        detail_16 = f"Summary alerts ({sum_data.get('alerts_total')}) == Alerts count ({len(alerts_data)}): {alerts_match}; Summary pending ({sum_data.get('pending_merges')}) == MQ pending ({mq_pending_count}): {mq_match}"
+        results.append(("16. /api/summary equals Alerts and Merge Queue counts", pass_16, detail_16))
+    except Exception as e:
+        results.append(("16. /api/summary equals Alerts and Merge Queue counts", False, str(e)))
+
+    # -------------------------------------------------------------
+    # Check 17: copilot health endpoint reports test_call_ok true
+    # -------------------------------------------------------------
+    try:
+        res_coph = client.get("/api/health/copilot", headers={"Authorization": "Bearer token_sp_dysp"})
+        coph_data = res_coph.json()
+        test_call_ok = coph_data.get("test_call_ok") is True
+        tool_call_ok = coph_data.get("sample_tool_call_ok") is True
+        key_present = coph_data.get("groq_key_present") is True
+        pass_17 = (res_coph.status_code == 200 and test_call_ok and tool_call_ok and key_present)
+        detail_17 = f"Status: {res_coph.status_code}, test_call_ok: {test_call_ok}, sample_tool_call_ok: {tool_call_ok}, groq_key_present: {key_present}, model: {coph_data.get('model')}"
+        results.append(("17. copilot health reports test_call_ok true", pass_17, detail_17))
+    except Exception as e:
+        results.append(("17. copilot health reports test_call_ok true", False, str(e)))
+
+    # -------------------------------------------------------------
     # PRINT SUMMARY
     # -------------------------------------------------------------
     print("\n" + "=" * 70)

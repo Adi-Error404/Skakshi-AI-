@@ -51,11 +51,19 @@ All demo accounts use password: `demo123`
 
 | Email | Name | Role | Permitted Actions & Permissions |
 |---|---|---|---|
-| `spdysp@demo.in` | SP A. Kashyap (IPS) | `sp_dysp` | **Full access**: Approve merges, simulate interdiction shatter, unmasked raw phone numbers, audit verification, Section 65B report export |
-| `cybercell@demo.in` | Insp. P. Nayak (Cyber) | `cyber_cell` | Simulate interdiction shatter, inspect ledger & tamper demo, report generation, masked phone numbers |
+| `spdysp@demo.in` | SP A. Kashyap (IPS) | `sp_dysp` | **Full access**: Approve merges, simulate interdiction shatter, unmasked raw phone numbers, audit verification, Section 65B report export (TOTP MFA enabled) |
+| `spraipur@demo.in` | SP R. Sen (IPS) | `sp_dysp_raipur` | **Raipur SP access**: SP-021 case administration, unmasking, Section 65B export (TOTP MFA enabled) |
+| `ig@demo.in` | IG P. Agrawal (IPS) | `ig` | **Range Commander**: Multi-case oversight (SP-014 + SP-021), cross-case link approvals (TOTP MFA enabled) |
+| `cybercell@demo.in` | Insp. P. Nayak (Cyber) | `cyber_cell` | Cross-case analysis, interdiction shatter, inspect ledger & tamper demo, report generation |
 | `headconstable@demo.in` | HC S. Deshmukh | `head_constable` | Simulate interdiction shatter, report generation, masked phone numbers |
 | `constable@demo.in` | Constable R. Verma | `constable` | Standard intelligence viewing, masked phone numbers (`+91 98XXXXX021`), simulation & merge approval restricted |
-| `auditor@demo.in` | Auditor M. Raman | `auditor` | Chain of custody audit, tamper verification, masked phone numbers |
+| `auditor@demo.in` | Auditor M. Raman | `auditor` | Chain of custody audit, insider threat monitoring, tamper verification |
+
+### Multi-Factor Authentication (TOTP)
+- **High-Privilege Roles**: `sp_dysp`, `sp_dysp_raipur`, and `ig` are protected by 6-digit TOTP two-factor authentication on the Official sign-in tab.
+- **Presenter Tool**: Run `python tools/show_totp.py` to view current 6-digit codes and active keys for live presentation.
+- **Secret Storage Note**: For this prototype, TOTP shared secrets are stored in the SQLite database (`user_totp` table) in plaintext. In an operational production deployment, secrets would be encrypted under an HSM or enveloped with KMS keys.
+- **Demo Sandbox**: The landing page public demo sandbox is exempt and labeled `Demo sandbox (no MFA)`.
 
 ---
 

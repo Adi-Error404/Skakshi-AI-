@@ -233,6 +233,20 @@ export const Network = () => {
     return [...cyNodes, ...cyEdges];
   }, [nodes, edges, minScore, edgeTypeFilter, alertOnly, removedNodeId, simResult]);
 
+  // Fit to screen on load and after filters
+  useEffect(() => {
+    if (cyRef.current) {
+      const cy = cyRef.current;
+      const timer = setTimeout(() => {
+        try {
+          cy.layout(layoutConfig).run();
+          cy.fit(undefined, 35);
+        } catch (e) {}
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [minScore, edgeTypeFilter, alertOnly, removedNodeId, currentDate]);
+
   // Setup cytoscape event listeners
   useEffect(() => {
     if (!cyRef.current) return;

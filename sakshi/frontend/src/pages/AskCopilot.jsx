@@ -59,17 +59,26 @@ export const AskCopilot = () => {
           role: 'assistant',
           text: res.answer,
           citations: res.citations || [],
-          confidence: res.confidence || 'high'
+          confidence: res.confidence || 'high',
+          unverified: res.unverified || false,
+          tools_used: res.tools_used || [],
+          mode: res.mode || 'fallback',
+          fallback_reason: res.fallback_reason || null
         }
       ]);
     } catch (err) {
+      const errMsg = err.response?.data?.detail || err.message || "Evidentiary query processing error.";
       setMessages(prev => [
         ...prev,
         {
           role: 'assistant',
-          text: "Evidentiary query processing error. Please verify backend connectivity.",
+          text: `Evidentiary query error: ${errMsg}`,
           citations: [],
-          confidence: 'low'
+          confidence: 'low',
+          unverified: true,
+          tools_used: [],
+          mode: 'fallback',
+          fallback_reason: err.response?.status === 401 ? 'auth_error' : (err.response?.status === 429 ? 'rate_limit' : 'network')
         }
       ]);
     } finally {
@@ -172,25 +181,60 @@ export const AskCopilot = () => {
                     : 'bg-slate-900 border border-slate-800 text-slate-200'
                 }`}
               >
-                {!isUser && m.confidence && (
-                  <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800/80">
-                    <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-red-400 flex items-center gap-1 font-heading">
-                      <ShieldCheck className="w-3.5 h-3.5 text-red-500" />
-                      Cited Answer
-                    </span>
-                    <span className={`px-1.5 py-0.2 rounded text-[9px] uppercase font-mono font-bold ${
-                      m.confidence === 'high' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
-                      m.confidence === 'medium' ? 'bg-amber-950 text-amber-300 border border-amber-800' :
-                      'bg-slate-800 text-slate-400'
-                    }`}>
-                      {m.confidence} Confidence
-                    </span>
+                {!isUser && (
+                  <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800/80 flex-wrap">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-red-400 flex items-center gap-1 font-heading">
+                        <ShieldCheck className="w-3.5 h-3.5 text-red-500" />
+                        Cited Answer
+                      </span>
+                      {m.mode === 'groq' ? (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] uppercase font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-700/60 flex items-center gap-1">
+                          <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
+                          GROQ AI
+                        </span>
+                      ) : m.mode === 'fallback' ? (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] uppercase font-mono font-bold bg-amber-950/80 text-amber-300 border border-amber-700/60 flex items-center gap-1">
+                          FALLBACK
+                          {m.fallback_reason && (
+                            <span className="font-mono text-amber-400 lowercase text-[9px] font-normal">
+                              reason: {m.fallback_reason}
+                            </span>
+                          )}
+                        </span>
+                      ) : null}
+                      {m.unverified && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] uppercase font-mono font-bold bg-rose-950 text-rose-300 border border-rose-800">
+                          Unverified
+                        </span>
+                      )}
+                    </div>
+                    {m.confidence && (
+                      <span className={`px-1.5 py-0.2 rounded text-[9px] uppercase font-mono font-bold ${
+                        m.confidence === 'high' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
+                        m.confidence === 'medium' ? 'bg-amber-950 text-amber-300 border border-amber-800' :
+                        'bg-slate-800 text-slate-400'
+                      }`}>
+                        {m.confidence} Confidence
+                      </span>
+                    )}
                   </div>
                 )}
 
                 <div className="whitespace-pre-wrap">
                   {isUser ? m.text : renderMessageText(m.text)}
                 </div>
+
+                {!isUser && m.tools_used && m.tools_used.length > 0 && (
+                  <div className="mt-2 text-[10px] font-mono text-slate-400 flex items-center gap-1.5 flex-wrap">
+                    <span className="text-slate-400">Tools:</span>
+                    {m.tools_used.map((t) => (
+                      <span key={t} className="bg-slate-800/80 px-1.5 py-0.5 rounded text-slate-300">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
 
                 {!isUser && m.citations && m.citations.length > 0 && (
                   <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center gap-1.5 flex-wrap">

@@ -29,6 +29,8 @@ SEED_USERS_RAW = [
     {"email": "headconstable@demo.in", "name": "HC S. Deshmukh", "role": "head_constable", "password": "demo123"},
     {"email": "constable@demo.in", "name": "Constable R. Verma", "role": "constable", "password": "demo123"},
     {"email": "auditor@demo.in", "name": "Auditor M. Raman", "role": "auditor", "password": "demo123"},
+    {"email": "ig@demo.in", "name": "IG P. Agrawal (IPS)", "role": "ig", "password": "demo123"},
+    {"email": "spraipur@demo.in", "name": "SP R. Sen (Raipur)", "role": "sp_dysp_raipur", "password": "demo123"},
 ]
 
 USERS_DB = {}
@@ -40,12 +42,13 @@ for u in SEED_USERS_RAW:
         "password_hash": hash_password(u["password"])
     }
 
-def create_jwt_token(email: str, role: str, name: str) -> str:
+def create_jwt_token(email: str, role: str, name: str, demo: bool = False) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": email,
         "role": role,
         "name": name,
+        "demo": demo,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(days=7)).timestamp())
     }
@@ -61,7 +64,7 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[str, A
     """Extracts and verifies JWT token or prototype bearer token."""
     if not authorization:
         # Default guest for demo convenience
-        return {"email": "spdysp@demo.in", "name": "SP A. Kashyap (IPS)", "role": "sp_dysp"}
+        return {"email": "spdysp@demo.in", "name": "SP A. Kashyap (IPS)", "role": "sp_dysp", "demo": False}
 
     parts = authorization.split(" ")
     if len(parts) == 2 and parts[0].lower() == "bearer":
@@ -71,9 +74,16 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[str, A
         payload = decode_jwt_token(token)
         if payload and "sub" in payload:
             email = payload["sub"]
-            if email in USERS_DB:
-                return USERS_DB[email]
-            return {"email": email, "name": payload.get("name", "User"), "role": payload.get("role", "constable")}
+            if email in USERS_DB and not payload.get("demo", False):
+                u = dict(USERS_DB[email])
+                u["demo"] = False
+                return u
+            return {
+                "email": email,
+                "name": payload.get("name", "User"),
+                "role": payload.get("role", "constable"),
+                "demo": payload.get("demo", False)
+            }
 
         # 2. Stage 1 token backward-compatibility
         for user in USERS_DB.values():
@@ -82,13 +92,16 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[str, A
         for email, user in USERS_DB.items():
             if email in token:
                 return user
-        for role in ["constable", "head_constable", "cyber_cell", "sp_dysp", "auditor"]:
+        for role in ["constable", "head_constable", "cyber_cell", "sp_dysp", "auditor", "ig", "sp_dysp_raipur"]:
             if role in token:
                 for u in USERS_DB.values():
                     if u["role"] == role:
                         return u
 
-    return {"email": "spdysp@demo.in", "name": "SP A. Kashyap (IPS)", "role": "sp_dysp"}
+        # Explicitly reject invalid or expired bearer token
+        raise HTTPException(status_code=401, detail="Invalid or expired authentication token")
+
+    raise HTTPException(status_code=401, detail="Invalid authorization header format")
 
 def require_roles(allowed_roles: List[str]):
     """FastAPI dependency enforcing role-based access control."""
@@ -119,9 +132,9 @@ def mask_phone_str(phone: Optional[str]) -> str:
     return "XXXXXXXXXX"
 
 def mask_phone_for_user(phone: Optional[str], user_role: str, is_unmasked: bool = False) -> str:
-    """Returns raw phone for sp_dysp or explicitly unmasked records; masks for all other roles."""
+    """Returns raw phone for sp_dysp, ig or explicitly unmasked records; masks for all other roles."""
     if not phone:
         return ""
-    if user_role == "sp_dysp" or is_unmasked:
+    if user_role in ("sp_dysp", "ig") or is_unmasked:
         return phone
     return mask_phone_str(phone)

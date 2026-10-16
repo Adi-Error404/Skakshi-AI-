@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Tuple, Set, Optional
 import networkx as nx
 
-from db import get_connection
+from db import get_connection, get_connection_for_case
 
 DATA_WINDOW_LATE = "2026-09-20T00:00:00"
 
@@ -523,6 +523,12 @@ class KnowledgeGraph:
                     "cross_community": round(cross_ratio, 2),
                     "evidence_diversity": round(diversity_norm, 2)
                 }
+            if n in G.nodes:
+                G.nodes[n]["betweenness"] = round(bw.get(n, 0.0), 4)
+                G.nodes[n]["pagerank"] = round(pr.get(n, 0.0), 4)
+                G.nodes[n]["priority"] = priority
+                G.nodes[n]["role_label"] = role_label
+                G.nodes[n]["community"] = comm
 
     def _build_entity_details(self):
         """Constructs detailed entity profiles with connections and evidence citations."""
@@ -596,21 +602,28 @@ class KnowledgeGraph:
             "edges": edges
         }
 
-# Global singleton in memory
+# Global per-case graph cache
+GRAPH_CACHE: Dict[str, KnowledgeGraph] = {}
 CURRENT_GRAPH = KnowledgeGraph()
 
-def get_graph_instance() -> KnowledgeGraph:
-    global CURRENT_GRAPH
-    if len(CURRENT_GRAPH.nx_graph) == 0:
-        conn = get_connection()
-        CURRENT_GRAPH.build_from_db(conn)
-    return CURRENT_GRAPH
+def get_graph_instance(case_id: str = "SP-014") -> KnowledgeGraph:
+    global GRAPH_CACHE, CURRENT_GRAPH
+    if case_id not in GRAPH_CACHE or len(GRAPH_CACHE[case_id].nx_graph) == 0:
+        conn = get_connection_for_case(case_id)
+        kg = KnowledgeGraph().build_from_db(conn)
+        GRAPH_CACHE[case_id] = kg
+        if case_id == "SP-014":
+            CURRENT_GRAPH = kg
+    return GRAPH_CACHE[case_id]
 
-def rebuild_graph() -> KnowledgeGraph:
-    global CURRENT_GRAPH
-    conn = get_connection()
-    CURRENT_GRAPH = KnowledgeGraph().build_from_db(conn)
-    return CURRENT_GRAPH
+def rebuild_graph(case_id: str = "SP-014") -> KnowledgeGraph:
+    global GRAPH_CACHE, CURRENT_GRAPH
+    conn = get_connection_for_case(case_id)
+    kg = KnowledgeGraph().build_from_db(conn)
+    GRAPH_CACHE[case_id] = kg
+    if case_id == "SP-014":
+        CURRENT_GRAPH = kg
+    return kg
 
 if __name__ == "__main__":
     conn = get_connection()
